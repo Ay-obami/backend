@@ -10,6 +10,7 @@ import { OrganizationsModule } from './organizations/organizations.module';
 import { EventsModule } from './events/events.module';
 import { TicketsModule } from './tickets/tickets.module';
 import { StellarModule } from './stellar/stellar.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { StellarModule } from './stellar/stellar.module';
     OrganizationsModule,
     EventsModule,
     TicketsModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

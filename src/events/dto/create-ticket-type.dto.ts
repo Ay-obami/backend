@@ -1,4 +1,5 @@
-import { IsInt, IsPositive, IsString, MinLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsDate, IsInt, IsOptional, IsPositive, IsString, MinLength } from 'class-validator';
 
 export class CreateTicketTypeDto {
   @IsString()
@@ -12,4 +13,11 @@ export class CreateTicketTypeDto {
   @IsInt()
   @IsPositive()
   quantityTotal: number;
+
+  @IsOptional() @Type(() => Date) @IsDate()
+  saleStartsAt?: Date;
+  @IsOptional() @Type(() => Date) @IsDate()
+  saleEndsAt?: Date;
+  @IsOptional()
+  isHidden?: boolean;
 }

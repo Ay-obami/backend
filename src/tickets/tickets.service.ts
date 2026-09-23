@@ -3,11 +3,13 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { ResaleListingStatus, TicketStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { StellarService } from '../stellar/stellar.service';
+import { NotificationService } from '../notifications/notifications.service';
 import { OfflineTokenService } from './offline-token.service';
 
 /** How long an offline-verifiable token stays valid before a scanner must re-verify online. */
@@ -19,7 +21,8 @@ export class TicketsService {
     private readonly prisma: PrismaService,
     private readonly organizations: OrganizationsService,
     private readonly stellar: StellarService,
-    private readonly offlineTokens: OfflineTokenService,
+    @Optional() private readonly notifications?: NotificationService,
+    @Optional() private readonly offlineTokens?: OfflineTokenService,
   ) {}
 
   // ---- Organizer-authorized issuance (off-chain payment already settled) ----
@@ -34,6 +37,7 @@ export class TicketsService {
       await this.getTicketTypeWithEvent(ticketTypeId);
     await this.organizations.assertMember(event.organizationId, userId);
     this.assertHasCapacity(ticketType.quantityIssued, ticketType.quantityTotal);
+    this.assertSaleWindow(ticketType.saleStartsAt, ticketType.saleEndsAt);
     if (event.chainEventId === null) {
       throw new BadRequestException(
         'Event has not been published on-chain yet',
@@ -118,7 +122,7 @@ export class TicketsService {
       await this.stellar.submitSignedTransaction(signedXdr);
     const chainTicketId = result as bigint;
 
-    return this.prisma.$transaction(async (tx) => {
+    const ticket = await this.prisma.$transaction(async (tx) => {
       await tx.ticketType.update({
         where: { id: ticketTypeId },
         data: { quantityIssued: { increment: 1 } },
@@ -134,6 +138,17 @@ export class TicketsService {
         },
       });
     });
+    const buyer = await this.prisma.user.findUnique({ where: { id: buyerId } });
+    if (buyer && this.notifications) {
+      await this.notifications.sendTicketReceipt({
+        to: buyer.email,
+        buyerName: buyer.name,
+        eventName: event.name,
+        ticketType: (await this.getTicketTypeWithEvent(ticketTypeId)).ticketType.name,
+        seat: seat ?? 'unassigned',
+      });
+    }
+    return ticket;
   }
 
   // ---- Direct transfer ----
@@ -204,14 +219,14 @@ export class TicketsService {
   // ---- Offline gate verification (see docs/OFFLINE_VERIFICATION.md) ----
 
   getOfflinePublicKeys() {
-    return this.offlineTokens.getPublicKeys();
+    return this.offlineTokens!.getPublicKeys();
   }
 
   async getOfflineToken(userId: string, ticketId: string) {
     const ticket = await this.getTicketWithOrg(ticketId);
     await this.organizations.assertMember(ticket.event.organizationId, userId);
 
-    return this.offlineTokens.sign({
+    return this.offlineTokens!.sign({
       ticketId: ticket.id,
       chainTicketId: ticket.chainTicketId.toString(),
       eventId: ticket.eventId,
@@ -428,5 +443,11 @@ export class TicketsService {
     if (issued >= total) {
       throw new BadRequestException('This ticket type is sold out');
     }
+  }
+
+  private assertSaleWindow(startsAt: Date | null, endsAt: Date | null) {
+    const now = new Date();
+    if (startsAt && now < startsAt) throw new BadRequestException('Ticket sales have not started');
+    if (endsAt && now > endsAt) throw new BadRequestException('Ticket sales have ended');
   }
 }
