@@ -133,6 +133,9 @@ model TicketType {
   price          BigInt
   quantityTotal  Int
   quantityIssued Int      @default(0)
+  saleStartsAt   DateTime?
+  saleEndsAt     DateTime?
+  isHidden       Boolean  @default(false)
   tickets        Ticket[]
   createdAt      DateTime @default(now())
 

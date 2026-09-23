@@ -128,6 +128,7 @@ describe('TicketsService', () => {
       prisma as unknown as PrismaService,
       organizations as unknown as OrganizationsService,
       stellar as unknown as StellarService,
+      undefined,
       offlineTokens as unknown as OfflineTokenService,
       config as unknown as ConfigService,
     );

@@ -42,12 +42,22 @@ export class EventsService {
   ) {
     const event = await this.getWithOrg(eventId);
     await this.organizations.assertMember(event.organizationId, userId);
+    if (
+      dto.saleStartsAt &&
+      dto.saleEndsAt &&
+      dto.saleEndsAt <= dto.saleStartsAt
+    ) {
+      throw new BadRequestException('Ticket sale end must be after its start');
+    }
     return this.prisma.ticketType.create({
       data: {
         eventId,
         name: dto.name,
         price: BigInt(dto.price),
         quantityTotal: dto.quantityTotal,
+        saleStartsAt: dto.saleStartsAt,
+        saleEndsAt: dto.saleEndsAt,
+        isHidden: dto.isHidden ?? false,
       },
     });
   }
@@ -110,7 +120,7 @@ export class EventsService {
     return this.prisma.event.findMany({
       where: { status: EventStatus.PUBLISHED },
       include: {
-        ticketTypes: true,
+        ticketTypes: { where: { isHidden: false } },
         organization: { select: { name: true, slug: true } },
       },
       orderBy: { startsAt: 'asc' },
