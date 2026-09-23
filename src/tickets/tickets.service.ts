@@ -10,6 +10,10 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { ResaleListingStatus, TicketStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  ListingInactiveError,
+  TicketTypeSoldOutError,
+} from '../common/errors/domain.error';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { StellarService } from '../stellar/stellar.service';
 import { NotificationService } from '../notifications/notifications.service';
@@ -638,7 +642,7 @@ export class TicketsService {
   async buildBuyResaleTx(buyerId: string, ticketId: string) {
     const ticket = await this.getTicketWithOrg(ticketId);
     if (ticket.status !== TicketStatus.RESALE) {
-      throw new BadRequestException('This ticket is not listed for resale');
+      throw new ListingInactiveError();
     }
     const buyer = await this.getUserWithWallet(buyerId);
 
@@ -815,7 +819,7 @@ export class TicketsService {
 
   private assertHasCapacity(issued: number, total: number) {
     if (issued >= total) {
-      throw new BadRequestException('This ticket type is sold out');
+      throw new TicketTypeSoldOutError();
     }
   }
 
