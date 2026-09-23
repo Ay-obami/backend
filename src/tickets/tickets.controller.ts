@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { CurrentUserPayload } from '../auth/decorators/current-user.decorator';
@@ -13,6 +21,7 @@ import { ConfirmTransferTicketDto } from './dto/confirm-transfer-ticket.dto';
 import { ConfirmSignedTxDto } from './dto/confirm-signed-tx.dto';
 import { ListForResaleDto } from './dto/list-for-resale.dto';
 import { ConfirmListForResaleDto } from './dto/confirm-list-for-resale.dto';
+import { UpdateResalePriceDto } from './dto/update-resale-price.dto';
 
 @Controller('tickets')
 @UseGuards(JwtAuthGuard)
@@ -196,7 +205,31 @@ export class TicketsController {
       ticketId,
       dto.price,
       dto.signedXdr,
+      dto.expiresAt,
     );
+  }
+
+  @Get('resale/:listingId/price-history')
+  getPriceHistory(@Param('listingId') listingId: string) {
+    return this.ticketsService.getPriceHistory(listingId);
+  }
+
+  @Patch('resale/:listingId/price')
+  updateResalePrice(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('listingId') listingId: string,
+    @Body() dto: UpdateResalePriceDto,
+  ) {
+    return this.ticketsService.updateResalePrice(
+      user.userId,
+      listingId,
+      dto.price,
+    );
+  }
+
+  @Post('resale/cancel-expired')
+  cancelExpiredListings() {
+    return this.ticketsService.cancelExpiredListings();
   }
 
   @Post(':ticketId/cancel-resale')

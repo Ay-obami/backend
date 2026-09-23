@@ -2,6 +2,7 @@ import { plainToInstance } from 'class-transformer';
 import {
   IsIn,
   IsInt,
+  IsOptional,
   IsString,
   MinLength,
   validateSync,
@@ -13,6 +14,10 @@ class EnvironmentVariables {
 
   @IsInt()
   PORT: number;
+
+  @IsInt()
+  @IsOptional()
+  MAX_ACTIVE_RESALE_LISTINGS_PER_USER?: number;
 
   @IsString()
   DATABASE_URL: string;

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
@@ -15,6 +16,7 @@ import type { PrismaService } from '../prisma/prisma.service';
 import type { OrganizationsService } from '../organizations/organizations.service';
 import type { StellarService } from '../stellar/stellar.service';
 import type { OfflineTokenService } from './offline-token.service';
+import type { ConfigService } from '@nestjs/config';
 
 function buildTicketType(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -42,10 +44,18 @@ describe('TicketsService', () => {
       update: jest.Mock;
       create: jest.Mock;
       findMany: jest.Mock;
+      updateMany: jest.Mock;
     };
     resaleListing: {
       create: jest.Mock;
       updateMany: jest.Mock;
+      findMany: jest.Mock;
+      count: jest.Mock;
+      findUnique: jest.Mock;
+      update: jest.Mock;
+    };
+    resalePriceHistory: {
+      create: jest.Mock;
       findMany: jest.Mock;
     };
     user: { findUnique: jest.Mock };
@@ -54,6 +64,7 @@ describe('TicketsService', () => {
   let organizations: { assertMember: jest.Mock };
   let stellar: Record<string, jest.Mock>;
   let offlineTokens: { sign: jest.Mock; getPublicKeys: jest.Mock };
+  let config: { get: jest.Mock };
 
   beforeEach(() => {
     prisma = {
@@ -63,14 +74,24 @@ describe('TicketsService', () => {
         update: jest.fn(),
         create: jest.fn(),
         findMany: jest.fn(),
+        updateMany: jest.fn(),
       },
       resaleListing: {
         create: jest.fn(),
         updateMany: jest.fn(),
         findMany: jest.fn(),
+        count: jest.fn().mockResolvedValue(0),
+        findUnique: jest.fn(),
+        update: jest.fn(),
+      },
+      resalePriceHistory: {
+        create: jest.fn(),
+        findMany: jest.fn(),
       },
       user: { findUnique: jest.fn() },
-      $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
+      $transaction: jest.fn((cb: (tx: unknown) => unknown) =>
+        Array.isArray(cb) ? Promise.all(cb) : cb(prisma),
+      ),
     };
     organizations = { assertMember: jest.fn().mockResolvedValue(undefined) };
     stellar = {
@@ -101,12 +122,14 @@ describe('TicketsService', () => {
       }),
       getPublicKeys: jest.fn().mockReturnValue({ 'test-key': 'pem' }),
     };
+    config = { get: jest.fn().mockReturnValue(5) };
 
     service = new TicketsService(
       prisma as unknown as PrismaService,
       organizations as unknown as OrganizationsService,
       stellar as unknown as StellarService,
       offlineTokens as unknown as OfflineTokenService,
+      config as unknown as ConfigService,
     );
   });
 
@@ -392,7 +415,118 @@ describe('TicketsService', () => {
           sellerId: 'owner-1',
           price: 1200n,
           txHash: '0xabc',
+          expiresAt: null,
+          priceHistory: {
+            create: {
+              price: 1200n,
+            },
+          },
         },
+      });
+    });
+
+    it('enforces soft limit on active resale listings per user (409 Conflict)', async () => {
+      prisma.resaleListing.count.mockResolvedValue(5);
+
+      await expect(
+        service.buildListForResaleTx('seller-1', 'ticket-1', '1000'),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      await expect(
+        service.confirmListForResale(
+          'seller-1',
+          'ticket-1',
+          '1000',
+          'signed-xdr',
+        ),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('supports optional expiresAt when creating resale listing', async () => {
+      prisma.ticket.findUnique.mockResolvedValue({
+        id: 'ticket-1',
+        ownerId: 'owner-1',
+        chainTicketId: 7n,
+        event: {
+          organizationId: 'org-1',
+          organization: { stellarAccount: 'GORG' },
+        },
+      });
+      prisma.resaleListing.create.mockResolvedValue({
+        id: 'listing-1',
+        status: 'ACTIVE',
+      });
+
+      const expiryStr = '2026-12-31T23:59:59.000Z';
+      await service.confirmListForResale(
+        'owner-1',
+        'ticket-1',
+        '1200',
+        'signed-xdr',
+        expiryStr,
+      );
+
+      const expectedData: unknown = expect.objectContaining({
+        expiresAt: new Date(expiryStr),
+      });
+      expect(prisma.resaleListing.create).toHaveBeenCalledWith({
+        data: expectedData,
+      });
+    });
+
+    it('updates resale listing price and logs price audit history', async () => {
+      prisma.resaleListing.findUnique.mockResolvedValue({
+        id: 'listing-1',
+        sellerId: 'owner-1',
+        status: 'ACTIVE',
+        price: 1000n,
+      });
+
+      await service.updateResalePrice('owner-1', 'listing-1', '1500');
+
+      expect(prisma.resalePriceHistory.create).toHaveBeenCalledWith({
+        data: {
+          resaleListingId: 'listing-1',
+          price: 1500n,
+        },
+      });
+      expect(prisma.resaleListing.update).toHaveBeenCalledWith({
+        where: { id: 'listing-1' },
+        data: { price: 1500n },
+      });
+    });
+
+    it('fetches price history audit trail for a listing', async () => {
+      prisma.resaleListing.findUnique.mockResolvedValue({ id: 'listing-1' });
+      prisma.resalePriceHistory.findMany.mockResolvedValue([
+        { id: 'h-1', price: 1000n },
+        { id: 'h-2', price: 1500n },
+      ]);
+
+      const history = await service.getPriceHistory('listing-1');
+      expect(history).toHaveLength(2);
+      expect(prisma.resalePriceHistory.findMany).toHaveBeenCalledWith({
+        where: { resaleListingId: 'listing-1' },
+        orderBy: { createdAt: 'asc' },
+      });
+    });
+
+    it('cancels expired listings and restores ticket status to VALID', async () => {
+      prisma.resaleListing.findMany.mockResolvedValue([
+        { id: 'listing-exp-1', ticketId: 'ticket-exp-1' },
+        { id: 'listing-exp-2', ticketId: 'ticket-exp-2' },
+      ]);
+
+      const res = await service.cancelExpiredListings();
+
+      expect(res.cancelledCount).toBe(2);
+      expect(prisma.resaleListing.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: ['listing-exp-1', 'listing-exp-2'] } },
+        data: { status: 'CANCELLED' },
+      });
+      expect(prisma.ticket.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: ['ticket-exp-1', 'ticket-exp-2'] } },
+        data: { status: 'VALID' },
       });
     });
   });
