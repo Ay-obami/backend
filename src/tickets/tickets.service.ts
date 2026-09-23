@@ -7,6 +7,10 @@ import {
 } from '@nestjs/common';
 import { ResaleListingStatus, TicketStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  ListingInactiveError,
+  TicketTypeSoldOutError,
+} from '../common/errors/domain.error';
 import { OrganizationsService } from '../organizations/organizations.service';
 import { StellarService } from '../stellar/stellar.service';
 import { NotificationService } from '../notifications/notifications.service';
@@ -144,7 +148,8 @@ export class TicketsService {
         to: buyer.email,
         buyerName: buyer.name,
         eventName: event.name,
-        ticketType: (await this.getTicketTypeWithEvent(ticketTypeId)).ticketType.name,
+        ticketType: (await this.getTicketTypeWithEvent(ticketTypeId)).ticketType
+          .name,
         seat: seat ?? 'unassigned',
       });
     }
@@ -349,7 +354,7 @@ export class TicketsService {
   async buildBuyResaleTx(buyerId: string, ticketId: string) {
     const ticket = await this.getTicketWithOrg(ticketId);
     if (ticket.status !== TicketStatus.RESALE) {
-      throw new BadRequestException('This ticket is not listed for resale');
+      throw new ListingInactiveError();
     }
     const buyer = await this.getUserWithWallet(buyerId);
 
@@ -441,13 +446,15 @@ export class TicketsService {
 
   private assertHasCapacity(issued: number, total: number) {
     if (issued >= total) {
-      throw new BadRequestException('This ticket type is sold out');
+      throw new TicketTypeSoldOutError();
     }
   }
 
   private assertSaleWindow(startsAt: Date | null, endsAt: Date | null) {
     const now = new Date();
-    if (startsAt && now < startsAt) throw new BadRequestException('Ticket sales have not started');
-    if (endsAt && now > endsAt) throw new BadRequestException('Ticket sales have ended');
+    if (startsAt && now < startsAt)
+      throw new BadRequestException('Ticket sales have not started');
+    if (endsAt && now > endsAt)
+      throw new BadRequestException('Ticket sales have ended');
   }
 }

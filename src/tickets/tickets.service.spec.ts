@@ -10,6 +10,10 @@ import {
 // Jest can't parse without a much heavier transform config.
 jest.mock('../stellar/stellar.service', () => ({ StellarService: jest.fn() }));
 
+import {
+  ListingInactiveError,
+  TicketTypeSoldOutError,
+} from '../common/errors/domain.error';
 import { TicketsService } from './tickets.service';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { OrganizationsService } from '../organizations/organizations.service';
@@ -118,7 +122,7 @@ describe('TicketsService', () => {
 
       await expect(
         service.buildIssueTx('organizer-1', 'tt-1', 'buyer-1'),
-      ).rejects.toBeInstanceOf(BadRequestException);
+      ).rejects.toBeInstanceOf(TicketTypeSoldOutError);
       expect(stellar.buildIssueTicketTx).not.toHaveBeenCalled();
     });
 
@@ -357,7 +361,7 @@ describe('TicketsService', () => {
 
       await expect(
         service.buildBuyResaleTx('buyer-1', 'ticket-1'),
-      ).rejects.toBeInstanceOf(BadRequestException);
+      ).rejects.toBeInstanceOf(ListingInactiveError);
     });
 
     it('creates an active resale listing on confirm', async () => {
