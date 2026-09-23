@@ -18,6 +18,7 @@ import { GatesModule } from './gates/gates.module';
 import { ScannerDevicesModule } from './scanner-devices/scanner-devices.module';
 import { PendingTxModule } from './pending-tx/pending-tx.module';
 import { BigIntSerializerInterceptor } from './common/interceptors/bigint-serializer.interceptor';
+import { RequestTimeoutInterceptor } from './common/interceptors/request-timeout.interceptor';
 
 @Module({
   imports: [
@@ -42,6 +43,10 @@ import { BigIntSerializerInterceptor } from './common/interceptors/bigint-serial
     {
       provide: APP_INTERCEPTOR,
       useClass: BigIntSerializerInterceptor,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: RequestTimeoutInterceptor,
     },
   ],
 })
