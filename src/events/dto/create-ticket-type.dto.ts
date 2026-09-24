@@ -1,5 +1,12 @@
 import { Type } from 'class-transformer';
-import { IsDate, IsInt, IsOptional, IsPositive, IsString, MinLength } from 'class-validator';
+import {
+  IsDate,
+  IsInt,
+  IsOptional,
+  IsPositive,
+  IsString,
+  MinLength,
+} from 'class-validator';
 import { IsBigIntString } from '../../common/decorators/is-bigint-string.decorator';
 
 export class CreateTicketTypeDto {
@@ -15,9 +22,13 @@ export class CreateTicketTypeDto {
   @IsPositive()
   quantityTotal: number;
 
-  @IsOptional() @Type(() => Date) @IsDate()
+  @IsOptional()
+  @Type(() => Date)
+  @IsDate()
   saleStartsAt?: Date;
-  @IsOptional() @Type(() => Date) @IsDate()
+  @IsOptional()
+  @Type(() => Date)
+  @IsDate()
   saleEndsAt?: Date;
   @IsOptional()
   isHidden?: boolean;

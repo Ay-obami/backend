@@ -42,7 +42,11 @@ export class EventsService {
   ) {
     const event = await this.getWithOrg(eventId);
     await this.organizations.assertMember(event.organizationId, userId);
-    if (dto.saleStartsAt && dto.saleEndsAt && dto.saleEndsAt <= dto.saleStartsAt) {
+    if (
+      dto.saleStartsAt &&
+      dto.saleEndsAt &&
+      dto.saleEndsAt <= dto.saleStartsAt
+    ) {
       throw new BadRequestException('Ticket sale end must be after its start');
     }
     return this.prisma.ticketType.create({

@@ -2,7 +2,7 @@ import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { ConfirmSignedTxDto } from './confirm-signed-tx.dto';
 
-const TX_HASH = 'a' * 64;
+const TX_HASH = 'a'.repeat(64);
 
 describe('ConfirmSignedTxDto', () => {
   it('accepts a string signedXdr', async () => {

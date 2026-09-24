@@ -1,10 +1,12 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
   Optional,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ResaleListingStatus, TicketStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { OrganizationsService } from '../organizations/organizations.service';
@@ -23,6 +25,7 @@ export class TicketsService {
     private readonly stellar: StellarService,
     @Optional() private readonly notifications?: NotificationService,
     @Optional() private readonly offlineTokens?: OfflineTokenService,
+    @Optional() private readonly config?: ConfigService,
   ) {}
 
   // ---- Organizer-authorized issuance (off-chain payment already settled) ----
@@ -149,7 +152,8 @@ export class TicketsService {
         to: buyer.email,
         buyerName: buyer.name,
         eventName: event.name,
-        ticketType: (await this.getTicketTypeWithEvent(ticketTypeId)).ticketType.name,
+        ticketType: (await this.getTicketTypeWithEvent(ticketTypeId)).ticketType
+          .name,
         seat: seat ?? 'unassigned',
       });
     }
@@ -295,9 +299,26 @@ export class TicketsService {
     });
   }
 
+  private async assertWithinResaleLimit(userId: string) {
+    const maxLimit =
+      this.config?.get<number>('MAX_ACTIVE_RESALE_LISTINGS_PER_USER') ?? 5;
+    const activeCount = await this.prisma.resaleListing.count({
+      where: {
+        sellerId: userId,
+        status: ResaleListingStatus.ACTIVE,
+      },
+    });
+    if (activeCount >= maxLimit) {
+      throw new ConflictException(
+        'Maximum active resale listings limit reached',
+      );
+    }
+  }
+
   // ---- Resale marketplace ----
 
   async buildListForResaleTx(userId: string, ticketId: string, price: string) {
+    await this.assertWithinResaleLimit(userId);
     const ticket = await this.getOwnedTicket(ticketId, userId);
     const owner = await this.getUserWithWallet(userId);
 
@@ -314,7 +335,9 @@ export class TicketsService {
     ticketId: string,
     price: string,
     signedXdr: string,
+    expiresAt?: string,
   ) {
+    await this.assertWithinResaleLimit(userId);
     await this.getOwnedTicket(ticketId, userId);
     const { txHash } = await this.stellar.submitSignedTransaction(signedXdr);
 
@@ -324,9 +347,90 @@ export class TicketsService {
         data: { status: TicketStatus.RESALE },
       });
       return tx.resaleListing.create({
-        data: { ticketId, sellerId: userId, price: BigInt(price), txHash },
+        data: {
+          ticketId,
+          sellerId: userId,
+          price: BigInt(price),
+          txHash,
+          expiresAt: expiresAt ? new Date(expiresAt) : null,
+          priceHistory: {
+            create: {
+              price: BigInt(price),
+            },
+          },
+        },
       });
     });
+  }
+
+  async updateResalePrice(userId: string, listingId: string, newPrice: string) {
+    const listing = await this.prisma.resaleListing.findUnique({
+      where: { id: listingId },
+    });
+    if (!listing) {
+      throw new NotFoundException('Resale listing not found');
+    }
+    if (listing.sellerId !== userId) {
+      throw new ForbiddenException('You do not own this resale listing');
+    }
+    if (listing.status !== ResaleListingStatus.ACTIVE) {
+      throw new BadRequestException('Listing is not active');
+    }
+    return this.prisma.$transaction(async (tx) => {
+      await tx.resalePriceHistory.create({
+        data: {
+          resaleListingId: listingId,
+          price: BigInt(newPrice),
+        },
+      });
+      return tx.resaleListing.update({
+        where: { id: listingId },
+        data: { price: BigInt(newPrice) },
+      });
+    });
+  }
+
+  async getPriceHistory(listingId: string) {
+    const listing = await this.prisma.resaleListing.findUnique({
+      where: { id: listingId },
+    });
+    if (!listing) {
+      throw new NotFoundException('Resale listing not found');
+    }
+    return this.prisma.resalePriceHistory.findMany({
+      where: { resaleListingId: listingId },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  async cancelExpiredListings() {
+    const now = new Date();
+    const expiredListings = await this.prisma.resaleListing.findMany({
+      where: {
+        status: ResaleListingStatus.ACTIVE,
+        expiresAt: { lte: now },
+      },
+    });
+
+    if (expiredListings.length === 0) {
+      return { cancelledCount: 0 };
+    }
+
+    const listingIds = expiredListings.map((l) => l.id);
+    const ticketIds = expiredListings.map((l) => l.ticketId);
+
+    await this.prisma.$transaction([
+      this.prisma.resaleListing.updateMany({
+        where: { id: { in: listingIds } },
+        data: { status: ResaleListingStatus.CANCELLED },
+      }),
+      this.prisma.ticket.updateMany({
+        where: { id: { in: ticketIds } },
+        data: { status: TicketStatus.VALID },
+      }),
+    ]);
+
+    return { cancelledCount: expiredListings.length };
   }
 
   async buildCancelResaleTx(userId: string, ticketId: string) {
@@ -479,7 +583,49 @@ export class TicketsService {
 
   private assertSaleWindow(startsAt: Date | null, endsAt: Date | null) {
     const now = new Date();
-    if (startsAt && now < startsAt) throw new BadRequestException('Ticket sales have not started');
-    if (endsAt && now > endsAt) throw new BadRequestException('Ticket sales have ended');
+    if (startsAt && now < startsAt)
+      throw new BadRequestException('Ticket sales have not started');
+    if (endsAt && now > endsAt)
+      throw new BadRequestException('Ticket sales have ended');
+  }
+
+  private assertRecipientPublicKey(
+    userPublicKey: string | null | undefined,
+    providedPublicKey: string,
+  ) {
+    if (userPublicKey !== providedPublicKey) {
+      throw new BadRequestException(
+        'Recipient public key does not match target user',
+      );
+    }
+  }
+
+  private encodeResaleCursor(createdAt: Date, id: string): string {
+    return Buffer.from(`${createdAt.toISOString()}|${id}`, 'utf8').toString(
+      'base64url',
+    );
+  }
+
+  private resaleCursorWhere(cursor: string) {
+    try {
+      const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+      const [dateStr, id] = decoded.split('|');
+      if (!dateStr || !id) {
+        throw new BadRequestException('Invalid cursor');
+      }
+      const date = new Date(dateStr);
+      if (isNaN(date.getTime())) {
+        throw new BadRequestException('Invalid cursor');
+      }
+      return {
+        OR: [
+          { createdAt: { lt: date } },
+          { createdAt: date, id: { lt: id } },
+        ],
+      };
+    } catch (err) {
+      if (err instanceof BadRequestException) throw err;
+      throw new BadRequestException('Invalid cursor');
+    }
   }
 }

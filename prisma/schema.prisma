@@ -71,6 +71,7 @@ model User {
   memberships      OrganizationMember[]
   tickets          Ticket[]
   resaleListings   ResaleListing[]
+  eventReminders   EventReminder[]
   createdAt        DateTime             @default(now())
   updatedAt        DateTime             @updatedAt
 }
@@ -102,8 +103,8 @@ model OrganizationMember {
 }
 
 model Event {
-  id                     String       @id @default(uuid())
-  organization           Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  id                     String          @id @default(uuid())
+  organization           Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   organizationId         String
   name                   String
   category               Industry
@@ -112,14 +113,15 @@ model Event {
   endsAt                 DateTime?
   /// The `event_id` (u64) this event was registered under on the ticketing
   /// contract via `create_event`. Null until the on-chain call succeeds.
-  chainEventId           BigInt?      @unique
-  maxResaleMultiplierBps Int          @default(11000)
-  royaltyBps             Int          @default(500)
-  status                 EventStatus  @default(DRAFT)
+  chainEventId           BigInt?         @unique
+  maxResaleMultiplierBps Int             @default(11000)
+  royaltyBps             Int             @default(500)
+  status                 EventStatus     @default(DRAFT)
   ticketTypes            TicketType[]
   tickets                Ticket[]
-  createdAt              DateTime     @default(now())
-  updatedAt              DateTime     @updatedAt
+  reminders              EventReminder[]
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
 }
 
 model TicketType {
@@ -164,14 +166,37 @@ model Ticket {
 }
 
 model ResaleListing {
-  id        String              @id @default(uuid())
-  ticket    Ticket              @relation(fields: [ticketId], references: [id], onDelete: Cascade)
-  ticketId  String
-  seller    User                @relation(fields: [sellerId], references: [id])
-  sellerId  String
-  price     BigInt
-  status    ResaleListingStatus @default(ACTIVE)
-  txHash    String?
-  createdAt DateTime            @default(now())
-  updatedAt DateTime            @updatedAt
+  id           String               @id @default(uuid())
+  ticket       Ticket               @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  ticketId     String
+  seller       User                 @relation(fields: [sellerId], references: [id])
+  sellerId     String
+  price        BigInt
+  status       ResaleListingStatus  @default(ACTIVE)
+  txHash       String?
+  expiresAt    DateTime?
+  priceHistory ResalePriceHistory[]
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+}
+
+model ResalePriceHistory {
+  id              String        @id @default(uuid())
+  resaleListing   ResaleListing @relation(fields: [resaleListingId], references: [id], onDelete: Cascade)
+  resaleListingId String
+  price           BigInt
+  createdAt       DateTime      @default(now())
+
+  @@index([resaleListingId])
+}
+
+model EventReminder {
+  id      String   @id @default(uuid())
+  event   Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  eventId String
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId  String
+  sentAt  DateTime @default(now())
+
+  @@unique([eventId, userId])
 }
