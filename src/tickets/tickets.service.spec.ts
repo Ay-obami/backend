@@ -117,7 +117,7 @@ describe('TicketsService', () => {
       );
 
       await expect(
-        service.buildIssueTx('organizer-1', 'tt-1', 'buyer-1'),
+        service.buildIssueTx('organizer-1', 'tt-1', 'buyer-1', 'GBUYER'),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(stellar.buildIssueTicketTx).not.toHaveBeenCalled();
     });
@@ -130,7 +130,7 @@ describe('TicketsService', () => {
       );
 
       await expect(
-        service.buildIssueTx('organizer-1', 'tt-1', 'buyer-1'),
+        service.buildIssueTx('organizer-1', 'tt-1', 'buyer-1', 'GBUYER'),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
@@ -142,7 +142,7 @@ describe('TicketsService', () => {
       });
 
       await expect(
-        service.buildIssueTx('organizer-1', 'tt-1', 'buyer-1'),
+        service.buildIssueTx('organizer-1', 'tt-1', 'buyer-1', 'GBUYER'),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
@@ -157,6 +157,7 @@ describe('TicketsService', () => {
         'organizer-1',
         'tt-1',
         'buyer-1',
+        'GBUYER',
         'A1',
       );
 
@@ -183,10 +184,16 @@ describe('TicketsService', () => {
         Promise.resolve({ id: 'ticket-1', ...data }),
       );
 
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'buyer-1',
+        stellarPublicKey: 'GBUYER',
+      });
+
       const ticket = await service.confirmIssue(
         'organizer-1',
         'tt-1',
         'buyer-1',
+        'GBUYER',
         'A1',
         'signed-xdr',
       );
@@ -219,7 +226,7 @@ describe('TicketsService', () => {
       });
 
       await expect(
-        service.buildTransferTx('not-the-owner', 'ticket-1', 'friend-1'),
+        service.buildTransferTx('not-the-owner', 'ticket-1', 'friend-1', 'GFRIEND'),
       ).rejects.toBeInstanceOf(ForbiddenException);
     });
 
@@ -237,7 +244,7 @@ describe('TicketsService', () => {
         .mockResolvedValueOnce({ id: 'owner-1', stellarPublicKey: 'GOWNER' })
         .mockResolvedValueOnce({ id: 'friend-1', stellarPublicKey: 'GFRIEND' });
 
-      await service.buildTransferTx('owner-1', 'ticket-1', 'friend-1');
+      await service.buildTransferTx('owner-1', 'ticket-1', 'friend-1', 'GFRIEND');
 
       expect(stellar.buildTransferTicketTx).toHaveBeenCalledWith({
         fromPublicKey: 'GOWNER',
@@ -394,6 +401,57 @@ describe('TicketsService', () => {
           txHash: '0xabc',
         },
       });
+    });
+  });
+
+  describe('findActiveResaleListings', () => {
+    it('returns a cursor page with stable createdAt+id ordering', async () => {
+      const newer = {
+        id: 'listing-2',
+        createdAt: new Date('2026-09-02T00:00:00.000Z'),
+      };
+      const older = {
+        id: 'listing-1',
+        createdAt: new Date('2026-09-01T00:00:00.000Z'),
+      };
+      prisma.resaleListing.findMany.mockResolvedValue([newer, older]);
+
+      const page = await service.findActiveResaleListings(undefined, 10);
+
+      expect(prisma.resaleListing.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: 11,
+        }),
+      );
+      expect(page.items).toEqual([newer, older]);
+      expect(page.nextCursor).toBeNull();
+      expect(page.limit).toBe(10);
+    });
+
+    it('exposes nextCursor when more rows remain', async () => {
+      const rows = [
+        { id: 'c', createdAt: new Date('2026-09-03T00:00:00.000Z') },
+        { id: 'b', createdAt: new Date('2026-09-02T00:00:00.000Z') },
+        { id: 'a', createdAt: new Date('2026-09-01T00:00:00.000Z') },
+      ];
+      prisma.resaleListing.findMany.mockResolvedValue(rows);
+
+      const page = await service.findActiveResaleListings(undefined, 2);
+
+      expect(page.items).toHaveLength(2);
+      expect(page.nextCursor).toEqual(
+        Buffer.from(
+          `${rows[1].createdAt.toISOString()}|${rows[1].id}`,
+          'utf8',
+        ).toString('base64url'),
+      );
+    });
+
+    it('rejects a malformed cursor', async () => {
+      await expect(
+        service.findActiveResaleListings('%%%', 10),
+      ).rejects.toBeInstanceOf(BadRequestException);
     });
   });
 
