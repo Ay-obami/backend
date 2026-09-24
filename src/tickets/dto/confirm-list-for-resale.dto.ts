@@ -1,7 +1,7 @@
-import { IsString } from 'class-validator';
+import { IsBigIntString } from '../../common/decorators/is-bigint-string.decorator';
 import { ConfirmSignedTxDto } from './confirm-signed-tx.dto';
 
 export class ConfirmListForResaleDto extends ConfirmSignedTxDto {
-  @IsString()
+  @IsBigIntString()
   price: string;
 }
