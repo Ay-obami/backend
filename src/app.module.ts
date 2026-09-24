@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -15,6 +16,7 @@ import { WaitlistModule } from './waitlist/waitlist.module';
 import { PromoCodesModule } from './promo-codes/promo-codes.module';
 import { GatesModule } from './gates/gates.module';
 import { ScannerDevicesModule } from './scanner-devices/scanner-devices.module';
+import { BigIntSerializerInterceptor } from './common/interceptors/bigint-serializer.interceptor';
 
 @Module({
   imports: [
@@ -33,6 +35,12 @@ import { ScannerDevicesModule } from './scanner-devices/scanner-devices.module';
     ScannerDevicesModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: BigIntSerializerInterceptor,
+    },
+  ],
 })
 export class AppModule {}

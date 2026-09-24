@@ -313,6 +313,7 @@ export class TicketsService {
     ticketId: string,
     signedXdr: string,
     gateId?: string,
+    reason?: string,
   ) {
     const ticket = await this.getTicketWithOrg(ticketId);
     await this.organizations.assertMember(ticket.event.organizationId, userId);
@@ -326,6 +327,7 @@ export class TicketsService {
         status: TicketStatus.USED,
         checkedInAt: new Date(),
         checkedInGateId: gateId ?? null,
+        checkInReason: reason ?? null,
       },
     });
   }
@@ -340,6 +342,7 @@ export class TicketsService {
     ticketId: string,
     signedXdr: string,
     gateId?: string,
+    reason?: string,
   ) {
     const ticket = await this.getTicketWithOrg(ticketId);
     if (gateId) {
@@ -352,6 +355,7 @@ export class TicketsService {
         status: TicketStatus.USED,
         checkedInAt: new Date(),
         checkedInGateId: gateId ?? null,
+        checkInReason: reason ?? null,
       },
     });
   }
@@ -375,6 +379,36 @@ export class TicketsService {
     await this.stellar.submitSignedTransaction(signedXdr);
     return this.prisma.ticket.update({
       where: { id: ticketId },
+      data: { status: TicketStatus.REVOKED },
+    });
+  }
+
+  async revokeBatch(userId: string, eventId: string, ticketIds: string[]) {
+    const MAX_BATCH_SIZE = 100;
+    if (ticketIds.length > MAX_BATCH_SIZE) {
+      throw new BadRequestException(
+        `Cannot revoke more than ${MAX_BATCH_SIZE} tickets at once`,
+      );
+    }
+
+    const event = await this.getEventWithOrg(eventId);
+    await this.organizations.assertMember(event.organizationId, userId);
+
+    const tickets = await this.prisma.ticket.findMany({
+      where: {
+        id: { in: ticketIds },
+        eventId,
+      },
+    });
+
+    if (tickets.length !== ticketIds.length) {
+      throw new BadRequestException(
+        'Some tickets were not found or do not belong to this event',
+      );
+    }
+
+    return this.prisma.ticket.updateMany({
+      where: { id: { in: ticketIds } },
       data: { status: TicketStatus.REVOKED },
     });
   }
@@ -692,6 +726,17 @@ export class TicketsService {
       throw new NotFoundException('Ticket type not found');
     }
     return { ticketType, event: ticketType.event };
+  }
+
+  private async getEventWithOrg(eventId: string) {
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+      include: { organization: true },
+    });
+    if (!event) {
+      throw new NotFoundException('Event not found');
+    }
+    return event;
   }
 
   private async getTicketWithOrg(ticketId: string) {

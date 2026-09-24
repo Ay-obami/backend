@@ -181,6 +181,8 @@ model Ticket {
   qrSecret       String          @unique @default(uuid())
   issuedTxHash   String?
   checkedInAt    DateTime?
+  /// Reason for check-in when scanner fails and staff override is used.
+  checkInReason  String?
   /// Which physical `Gate` this ticket was scanned at, if any. Null for
   /// tickets checked in before gates existed, or checked in through a
   /// non-gated flow.
