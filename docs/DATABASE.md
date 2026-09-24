@@ -20,3 +20,67 @@ npx prisma migrate deploy   # production
 `chainEventId` and `chainTicketId` are unique `BigInt` columns mapping
 1:1 to the on-chain `u64` ids — see `docs/ARCHITECTURE.md` for why the
 chain remains the source of truth despite this cache.
+
+## Backup and restore
+
+All commands below assume a local PostgreSQL instance reachable at
+`postgresql://stellartickets:stellartickets@localhost:5432/stellartickets`
+(the default from `docker-compose.yml`). Substitute your `DATABASE_URL`
+as needed, and prefix with `docker exec -i <container> ` when the
+database runs inside a container (e.g. `docker compose ps` to get the
+name).
+
+### Logical backup (`pg_dump`)
+
+Create a plain-text SQL dump:
+
+```bash
+pg_dump "$DATABASE_URL" > backup_$(date +%Y%m%d_%H%M%S).sql
+```
+
+Restore from a plain-text dump (drops and recreates tables via the
+`--clean` and `--if-exists` flags):
+
+```bash
+psql "$DATABASE_URL" --clean --if-exists -f backup_*.sql
+```
+
+### Compressed/custom-format backup (`pg_dump` + `pg_restore`)
+
+Create a compressed dump (recommended for larger databases):
+
+```bash
+pg_dump --format=custom "$DATABASE_URL" > backup_$(date +%Y%m%d_%H%M%S).dump
+```
+
+Restore from a custom-format dump:
+
+```bash
+pg_restore --clean --if-exists --no-owner --verbose "$DATABASE_URL" backup_*.dump
+```
+
+### Database dump via Prisma (schema introspection)
+
+For a quick schema-only dump without touching data, Prisma can introspect
+the live database and write a Prisma-compatible schema:
+
+```bash
+npx prisma db pull       # introspect the live database into schema.prisma
+```
+
+> ⚠ **Prisma migrate is the canonical source of truth for schema changes** —
+> `prisma db pull` is for introspection only and does not replace version-controlled
+> migrations.
+
+### Quick restore from Prisma migrations (dev)
+
+To completely reset the development database to the latest migration
+state and reseed:
+
+```bash
+npm run db:reset
+```
+
+This is equivalent to `prisma migrate reset --force`, which drops the
+database, applies all migrations from `prisma/migrations/`, and runs the
+seed script defined in `prisma/seed.ts`.
