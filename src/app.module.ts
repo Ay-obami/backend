@@ -16,6 +16,7 @@ import { WaitlistModule } from './waitlist/waitlist.module';
 import { PromoCodesModule } from './promo-codes/promo-codes.module';
 import { GatesModule } from './gates/gates.module';
 import { ScannerDevicesModule } from './scanner-devices/scanner-devices.module';
+import { PendingTxModule } from './pending-tx/pending-tx.module';
 import { BigIntSerializerInterceptor } from './common/interceptors/bigint-serializer.interceptor';
 
 @Module({
@@ -33,6 +34,7 @@ import { BigIntSerializerInterceptor } from './common/interceptors/bigint-serial
     PromoCodesModule,
     GatesModule,
     ScannerDevicesModule,
+    PendingTxModule,
   ],
   controllers: [AppController],
   providers: [

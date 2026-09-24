@@ -7,6 +7,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { OfflineTokenService } from './offline-token.service';
 import { ResaleExpiryService } from './resale-expiry.service';
 import { ScanRateLimitGuard } from '../common/guards/scan-rate-limit.guard';
+import { IdempotencyInterceptor } from '../common/interceptors/idempotency.interceptor';
 import { PromoCodesModule } from '../promo-codes/promo-codes.module';
 import { GatesModule } from '../gates/gates.module';
 
@@ -24,6 +25,7 @@ import { GatesModule } from '../gates/gates.module';
     OfflineTokenService,
     ResaleExpiryService,
     ScanRateLimitGuard,
+    IdempotencyInterceptor,
   ],
   exports: [TicketsService, ResaleExpiryService],
 })

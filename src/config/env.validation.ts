@@ -60,6 +60,23 @@ class EnvironmentVariables {
   /// before a rotation keep verifying until they expire.
   @IsString()
   OFFLINE_SIGNING_PUBLIC_KEYS: string;
+
+  /// How long a PendingTx row (build-transaction intent) stays valid before
+  /// it's considered expired and eligible for cleanup.
+  @IsInt()
+  @IsOptional()
+  PENDING_TX_RETENTION_MINUTES?: number;
+
+  /// How often the PendingTx cleanup job runs, in minutes.
+  @IsInt()
+  @IsOptional()
+  PENDING_TX_CLEANUP_INTERVAL_MINUTES?: number;
+
+  /// How long a cached response for an Idempotency-Key stays valid, in
+  /// minutes, before a repeated key is treated as a new request.
+  @IsInt()
+  @IsOptional()
+  IDEMPOTENCY_KEY_TTL_MINUTES?: number;
 }
 
 export function validate(config: Record<string, unknown>) {
