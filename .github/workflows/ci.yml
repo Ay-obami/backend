@@ -28,6 +28,9 @@ jobs:
       - name: Lint
         run: npx eslint "src/**/*.ts"
 
+      - name: Audit dependencies
+        run: npm run audit:check
+
       - name: Unit tests
         run: npm test
 
