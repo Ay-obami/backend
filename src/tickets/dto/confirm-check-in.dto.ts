@@ -1,4 +1,4 @@
-import { IsOptional, IsUUID } from 'class-validator';
+import { IsOptional, IsString, IsUUID } from 'class-validator';
 import { ConfirmSignedTxDto } from './confirm-signed-tx.dto';
 
 export class ConfirmCheckInDto extends ConfirmSignedTxDto {
@@ -6,4 +6,9 @@ export class ConfirmCheckInDto extends ConfirmSignedTxDto {
   @IsOptional()
   @IsUUID()
   gateId?: string;
+
+  /** Reason for check-in when scanner fails and staff override is used. */
+  @IsOptional()
+  @IsString()
+  reason?: string;
 }

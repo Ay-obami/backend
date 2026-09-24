@@ -46,6 +46,7 @@ describe('TicketsService', () => {
       findMany: jest.Mock;
       updateMany: jest.Mock;
     };
+    event: { findUnique: jest.Mock };
     resaleListing: {
       create: jest.Mock;
       updateMany: jest.Mock;
@@ -76,6 +77,7 @@ describe('TicketsService', () => {
         findMany: jest.fn(),
         updateMany: jest.fn(),
       },
+      event: { findUnique: jest.fn() },
       resaleListing: {
         create: jest.fn(),
         updateMany: jest.fn(),
@@ -839,6 +841,124 @@ describe('TicketsService', () => {
       await expect(
         service.updateResalePrice('someone-else', 'listing-1', '900'),
       ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+  });
+
+  // ---- Bulk revoke (#267) ----
+
+  describe('revokeBatch', () => {
+    it('revokes a batch of tickets', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'event-1',
+        organizationId: 'org-1',
+        organization: { stellarAccount: 'GORGANIZER' },
+      });
+      prisma.ticket.findMany.mockResolvedValue([
+        { id: 'ticket-1', eventId: 'event-1' },
+        { id: 'ticket-2', eventId: 'event-1' },
+      ]);
+      prisma.ticket.updateMany.mockResolvedValue({ count: 2 });
+
+      const result = await service.revokeBatch('user-1', 'event-1', [
+        'ticket-1',
+        'ticket-2',
+      ]);
+
+      expect(result.count).toBe(2);
+      expect(prisma.ticket.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: { in: ['ticket-1', 'ticket-2'] } },
+          data: { status: 'REVOKED' },
+        }),
+      );
+    });
+
+    it('rejects batch exceeding max size', async () => {
+      const ticketIds = Array.from({ length: 101 }, (_, i) => `ticket-${i}`);
+
+      await expect(
+        service.revokeBatch('user-1', 'event-1', ticketIds),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejects when user is not an organization member', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'event-1',
+        organizationId: 'org-1',
+        organization: { stellarAccount: 'GORGANIZER' },
+      });
+      organizations.assertMember.mockRejectedValue(
+        new ForbiddenException('Not a member'),
+      );
+
+      await expect(
+        service.revokeBatch('user-1', 'event-1', ['ticket-1']),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('rejects when some tickets are not found', async () => {
+      prisma.event.findUnique.mockResolvedValue({
+        id: 'event-1',
+        organizationId: 'org-1',
+        organization: { stellarAccount: 'GORGANIZER' },
+      });
+      prisma.ticket.findMany.mockResolvedValue([
+        { id: 'ticket-1', eventId: 'event-1' },
+      ]);
+
+      await expect(
+        service.revokeBatch('user-1', 'event-1', ['ticket-1', 'ticket-2']),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  // ---- Check-in with reason (#266) ----
+
+  describe('confirmCheckIn with reason', () => {
+    it('stores check-in reason when provided', async () => {
+      prisma.ticket.findUnique.mockResolvedValue({
+        id: 'ticket-1',
+        eventId: 'event-1',
+        ownerId: 'owner-1',
+        event: { organizationId: 'org-1', organization: {} },
+      });
+      prisma.ticket.update.mockResolvedValue({
+        id: 'ticket-1',
+        checkInReason: 'scanner_malfunction',
+      });
+
+      await service.confirmCheckIn('user-1', 'ticket-1', 'signed-xdr', undefined, 'scanner_malfunction');
+
+      expect(prisma.ticket.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            checkInReason: 'scanner_malfunction',
+          }),
+        }),
+      );
+    });
+
+    it('stores null reason when not provided', async () => {
+      prisma.ticket.findUnique.mockResolvedValue({
+        id: 'ticket-1',
+        eventId: 'event-1',
+        ownerId: 'owner-1',
+        event: { organizationId: 'org-1', organization: {} },
+      });
+      prisma.ticket.update.mockResolvedValue({
+        id: 'ticket-1',
+        checkInReason: null,
+      });
+
+      await service.confirmCheckIn('user-1', 'ticket-1', 'signed-xdr');
+
+      expect(prisma.ticket.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            checkInReason: null,
+          }),
+        }),
+      );
     });
   });
 });

@@ -25,6 +25,7 @@ import { ListForResaleDto } from './dto/list-for-resale.dto';
 import { ConfirmListForResaleDto } from './dto/confirm-list-for-resale.dto';
 import { UpdateResalePriceDto } from './dto/update-resale-price.dto';
 import { ResaleListingsQueryDto } from './dto/resale-listings-query.dto';
+import { RevokeBatchDto } from './dto/revoke-batch.dto';
 
 @Controller('tickets')
 @UseGuards(JwtAuthGuard)
@@ -170,6 +171,7 @@ export class TicketsController {
       ticketId,
       dto.signedXdr,
       dto.gateId,
+      dto.reason,
     );
   }
 
@@ -192,6 +194,15 @@ export class TicketsController {
       ticketId,
       dto.signedXdr,
     );
+  }
+
+  @Post('events/:eventId/revoke-batch')
+  revokeBatch(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('eventId') eventId: string,
+    @Body() dto: RevokeBatchDto,
+  ) {
+    return this.ticketsService.revokeBatch(user.userId, eventId, dto.ticketIds);
   }
 
   @Post(':ticketId/list-resale')
