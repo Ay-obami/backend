@@ -644,6 +644,50 @@ describe('TicketsService', () => {
     });
   });
 
+  describe('findByChainTicketId (#268)', () => {
+    const ticket = {
+      id: 'ticket-1',
+      chainTicketId: 7n,
+      event: { id: 'event-1', organizationId: 'org-1', organization: {} },
+      ticketType: { id: 'tt-1' },
+    };
+
+    it('returns the ticket when the caller is staff of the owning organization', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticket);
+
+      const result = await service.findByChainTicketId('staff-1', 7n);
+
+      expect(prisma.ticket.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { chainTicketId: 7n } }),
+      );
+      expect(organizations.assertMember).toHaveBeenCalledWith(
+        'org-1',
+        'staff-1',
+      );
+      expect(result).toBe(ticket);
+    });
+
+    it('throws NotFoundException for an unknown chainTicketId', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.findByChainTicketId('staff-1', 999n),
+      ).rejects.toThrow(NotFoundException);
+      expect(organizations.assertMember).not.toHaveBeenCalled();
+    });
+
+    it('propagates ForbiddenException when the caller is not org staff', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticket);
+      organizations.assertMember.mockRejectedValueOnce(
+        new ForbiddenException('You are not a member of this organization'),
+      );
+
+      await expect(
+        service.findByChainTicketId('outsider-1', 7n),
+      ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
   // ---- #321 Graceful degradation ----
 
   describe('verify — graceful RPC degradation (#321)', () => {

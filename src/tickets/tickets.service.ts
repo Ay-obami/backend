@@ -715,6 +715,24 @@ export class TicketsService {
     });
   }
 
+  /** Looks up a ticket by its on-chain id. Restricted to staff of the owning event's organization. */
+  async findByChainTicketId(staffUserId: string, chainTicketId: bigint) {
+    const ticket = await this.prisma.ticket.findUnique({
+      where: { chainTicketId },
+      include: { event: { include: { organization: true } }, ticketType: true },
+    });
+    if (!ticket) {
+      throw new NotFoundException('Ticket not found');
+    }
+
+    await this.organizations.assertMember(
+      ticket.event.organizationId,
+      staffUserId,
+    );
+
+    return ticket;
+  }
+
   // ---- shared helpers ----
 
   private async getTicketTypeWithEvent(ticketTypeId: string) {

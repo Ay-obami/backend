@@ -2,16 +2,19 @@ import {
   Body,
   Controller,
   Get,
+  NotFoundException,
   Param,
   Patch,
   Post,
   Query,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { CurrentUserPayload } from '../auth/decorators/current-user.decorator';
 import { ScanRateLimitGuard } from '../common/guards/scan-rate-limit.guard';
+import { IdempotencyInterceptor } from '../common/interceptors/idempotency.interceptor';
 import { TicketsService } from './tickets.service';
 import { IssueTicketDto } from './dto/issue-ticket.dto';
 import { ConfirmIssueTicketDto } from './dto/confirm-issue-ticket.dto';
@@ -26,6 +29,15 @@ import { ConfirmListForResaleDto } from './dto/confirm-list-for-resale.dto';
 import { UpdateResalePriceDto } from './dto/update-resale-price.dto';
 import { ResaleListingsQueryDto } from './dto/resale-listings-query.dto';
 import { RevokeBatchDto } from './dto/revoke-batch.dto';
+
+/** Parses a route param into the BigInt `chainTicketId`, treating a malformed value as "not found". */
+function parseChainTicketId(raw: string): bigint {
+  try {
+    return BigInt(raw);
+  } catch {
+    throw new NotFoundException('Ticket not found');
+  }
+}
 
 @Controller('tickets')
 @UseGuards(JwtAuthGuard)
@@ -59,6 +71,17 @@ export class TicketsController {
     return this.ticketsService.getOfflinePublicKeys();
   }
 
+  @Get('by-chain/:chainTicketId')
+  findByChainTicketId(
+    @CurrentUser() user: CurrentUserPayload,
+    @Param('chainTicketId') chainTicketId: string,
+  ) {
+    return this.ticketsService.findByChainTicketId(
+      user.userId,
+      parseChainTicketId(chainTicketId),
+    );
+  }
+
   @Get(':ticketId/offline-token')
   getOfflineToken(
     @CurrentUser() user: CurrentUserPayload,
@@ -68,6 +91,7 @@ export class TicketsController {
   }
 
   @Post('issue')
+  @UseInterceptors(IdempotencyInterceptor)
   buildIssueTx(
     @CurrentUser() user: CurrentUserPayload,
     @Body() dto: IssueTicketDto,
@@ -97,6 +121,7 @@ export class TicketsController {
   }
 
   @Post('purchase')
+  @UseInterceptors(IdempotencyInterceptor)
   buildPurchaseTx(
     @CurrentUser() user: CurrentUserPayload,
     @Body() dto: PurchasePrimaryDto,
@@ -124,6 +149,7 @@ export class TicketsController {
   }
 
   @Post(':ticketId/transfer')
+  @UseInterceptors(IdempotencyInterceptor)
   buildTransferTx(
     @CurrentUser() user: CurrentUserPayload,
     @Param('ticketId') ticketId: string,
@@ -153,6 +179,7 @@ export class TicketsController {
   }
 
   @Post(':ticketId/check-in')
+  @UseInterceptors(IdempotencyInterceptor)
   buildCheckInTx(
     @CurrentUser() user: CurrentUserPayload,
     @Param('ticketId') ticketId: string,
@@ -176,6 +203,7 @@ export class TicketsController {
   }
 
   @Post(':ticketId/revoke')
+  @UseInterceptors(IdempotencyInterceptor)
   buildRevokeTx(
     @CurrentUser() user: CurrentUserPayload,
     @Param('ticketId') ticketId: string,
@@ -206,6 +234,7 @@ export class TicketsController {
   }
 
   @Post(':ticketId/list-resale')
+  @UseInterceptors(IdempotencyInterceptor)
   buildListForResaleTx(
     @CurrentUser() user: CurrentUserPayload,
     @Param('ticketId') ticketId: string,
@@ -257,6 +286,7 @@ export class TicketsController {
   }
 
   @Post(':ticketId/cancel-resale')
+  @UseInterceptors(IdempotencyInterceptor)
   buildCancelResaleTx(
     @CurrentUser() user: CurrentUserPayload,
     @Param('ticketId') ticketId: string,
@@ -278,6 +308,7 @@ export class TicketsController {
   }
 
   @Post(':ticketId/buy-resale')
+  @UseInterceptors(IdempotencyInterceptor)
   buildBuyResaleTx(
     @CurrentUser() user: CurrentUserPayload,
     @Param('ticketId') ticketId: string,
