@@ -60,6 +60,21 @@ enum ResaleListingStatus {
   CANCELLED
 }
 
+/// Position in a `WaitlistEntry` queue is derived from `createdAt` (FIFO), not
+/// stored directly, so re-ordering never requires rewriting every row.
+enum WaitlistEntryStatus {
+  WAITING
+  OFFERED
+  CONVERTED
+  EXPIRED
+  CANCELLED
+}
+
+enum PromoCodeDiscountType {
+  PERCENT
+  FIXED
+}
+
 model User {
   id               String               @id @default(uuid())
   email            String               @unique
@@ -72,6 +87,8 @@ model User {
   tickets          Ticket[]
   resaleListings   ResaleListing[]
   eventReminders   EventReminder[]
+  waitlistEntries  WaitlistEntry[]
+  promoRedemptions PromoCodeRedemption[]
   createdAt        DateTime             @default(now())
   updatedAt        DateTime             @updatedAt
 }
@@ -120,6 +137,9 @@ model Event {
   ticketTypes            TicketType[]
   tickets                Ticket[]
   reminders              EventReminder[]
+  promoCodes             PromoCode[]
+  gates                  Gate[]
+  scannerDevices         ScannerDevice[]
   createdAt              DateTime        @default(now())
   updatedAt              DateTime        @updatedAt
 }
@@ -137,6 +157,7 @@ model TicketType {
   saleEndsAt     DateTime?
   isHidden       Boolean  @default(false)
   tickets        Ticket[]
+  waitlistEntries WaitlistEntry[]
   createdAt      DateTime @default(now())
 
   @@unique([eventId, name])
@@ -160,7 +181,13 @@ model Ticket {
   qrSecret       String          @unique @default(uuid())
   issuedTxHash   String?
   checkedInAt    DateTime?
+  /// Which physical `Gate` this ticket was scanned at, if any. Null for
+  /// tickets checked in before gates existed, or checked in through a
+  /// non-gated flow.
+  checkedInGate   Gate?           @relation(fields: [checkedInGateId], references: [id])
+  checkedInGateId String?
   resaleListings ResaleListing[]
+  promoRedemption PromoCodeRedemption?
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 }
@@ -199,4 +226,95 @@ model EventReminder {
   sentAt  DateTime @default(now())
 
   @@unique([eventId, userId])
+}
+
+/// A sold-out `TicketType`'s waitlist. Ordering is fair by construction: FIFO
+/// on `createdAt`, with a unique (ticketTypeId, userId) pair so nobody can
+/// buy a second place in line, and position is always computed by counting
+/// earlier-`createdAt` WAITING rows rather than a mutable counter that could
+/// drift out of order.
+model WaitlistEntry {
+  id             String              @id @default(uuid())
+  ticketType     TicketType          @relation(fields: [ticketTypeId], references: [id], onDelete: Cascade)
+  ticketTypeId   String
+  user           User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId         String
+  status         WaitlistEntryStatus @default(WAITING)
+  /// Set when capacity opens up and this entry is offered a purchase window.
+  offeredAt      DateTime?
+  offerExpiresAt DateTime?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  @@unique([ticketTypeId, userId])
+  @@index([ticketTypeId, status, createdAt])
+}
+
+/// A discount code redeemable against primary sales for one `Event`.
+model PromoCode {
+  id              String                 @id @default(uuid())
+  event           Event                  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  eventId         String
+  /// Stored upper-cased; lookups normalize input the same way.
+  code            String
+  discountType    PromoCodeDiscountType
+  /// Basis points (0-10000) when `discountType` is PERCENT; smallest-unit
+  /// amount to subtract from price when FIXED.
+  discountValue   Int
+  /// Null means unlimited redemptions.
+  maxRedemptions  Int?
+  redemptionCount Int                    @default(0)
+  expiresAt       DateTime?
+  isActive        Boolean                @default(true)
+  redemptions     PromoCodeRedemption[]
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  @@unique([eventId, code])
+}
+
+/// One redemption of a `PromoCode` by a user, at most once each (the
+/// unique constraint on [promoCodeId, userId] is the per-user usage limit;
+/// `PromoCode.maxRedemptions` is the aggregate usage limit).
+model PromoCodeRedemption {
+  id          String    @id @default(uuid())
+  promoCode   PromoCode @relation(fields: [promoCodeId], references: [id], onDelete: Cascade)
+  promoCodeId String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  ticket      Ticket?   @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  ticketId    String?   @unique
+  createdAt   DateTime  @default(now())
+
+  @@unique([promoCodeId, userId])
+}
+
+/// A physical entrance/gate at an `Event`'s venue. Check-ins are attributed
+/// to one via `Ticket.checkedInGateId`.
+model Gate {
+  id        String   @id @default(uuid())
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  eventId   String
+  name      String
+  checkIns  Ticket[]
+  createdAt DateTime @default(now())
+
+  @@unique([eventId, name])
+}
+
+/// A registered check-in scanner, scoped to one `Event`. Holds a hash of an
+/// opaque bearer token issued once at registration (the raw token is never
+/// stored) so a device's access can be revoked independently of any staff
+/// member's JWT -- see `ScannerDeviceGuard`.
+model ScannerDevice {
+  id         String    @id @default(uuid())
+  event      Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  eventId    String
+  name       String
+  tokenHash  String    @unique
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([eventId])
 }

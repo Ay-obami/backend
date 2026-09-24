@@ -20,6 +20,7 @@ import { ConfirmPurchasePrimaryDto } from './dto/confirm-purchase-primary.dto';
 import { TransferTicketDto } from './dto/transfer-ticket.dto';
 import { ConfirmTransferTicketDto } from './dto/confirm-transfer-ticket.dto';
 import { ConfirmSignedTxDto } from './dto/confirm-signed-tx.dto';
+import { ConfirmCheckInDto } from './dto/confirm-check-in.dto';
 import { ListForResaleDto } from './dto/list-for-resale.dto';
 import { ConfirmListForResaleDto } from './dto/confirm-list-for-resale.dto';
 import { UpdateResalePriceDto } from './dto/update-resale-price.dto';
@@ -100,6 +101,7 @@ export class TicketsController {
       user.userId,
       dto.ticketTypeId,
       dto.seat,
+      dto.promoCode,
     );
   }
 
@@ -113,6 +115,7 @@ export class TicketsController {
       dto.ticketTypeId,
       dto.seat,
       dto.signedXdr,
+      dto.promoCode,
     );
   }
 
@@ -157,12 +160,13 @@ export class TicketsController {
   confirmCheckIn(
     @CurrentUser() user: CurrentUserPayload,
     @Param('ticketId') ticketId: string,
-    @Body() dto: ConfirmSignedTxDto,
+    @Body() dto: ConfirmCheckInDto,
   ) {
     return this.ticketsService.confirmCheckIn(
       user.userId,
       ticketId,
       dto.signedXdr,
+      dto.gateId,
     );
   }
 

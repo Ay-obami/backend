@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsUUID } from 'class-validator';
+import { IsOptional, IsString, IsUUID, Length } from 'class-validator';
 
 export class PurchasePrimaryDto {
   @IsUUID()
@@ -7,4 +7,9 @@ export class PurchasePrimaryDto {
   @IsOptional()
   @IsString()
   seat?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(3, 32)
+  promoCode?: string;
 }
