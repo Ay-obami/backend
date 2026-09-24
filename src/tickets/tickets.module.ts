@@ -7,9 +7,17 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { OfflineTokenService } from './offline-token.service';
 import { ResaleExpiryService } from './resale-expiry.service';
 import { ScanRateLimitGuard } from '../common/guards/scan-rate-limit.guard';
+import { PromoCodesModule } from '../promo-codes/promo-codes.module';
+import { GatesModule } from '../gates/gates.module';
 
 @Module({
-  imports: [OrganizationsModule, StellarModule, NotificationsModule],
+  imports: [
+    OrganizationsModule,
+    StellarModule,
+    NotificationsModule,
+    PromoCodesModule,
+    GatesModule,
+  ],
   controllers: [TicketsController],
   providers: [
     TicketsService,

@@ -11,6 +11,10 @@ import { EventsModule } from './events/events.module';
 import { TicketsModule } from './tickets/tickets.module';
 import { StellarModule } from './stellar/stellar.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { WaitlistModule } from './waitlist/waitlist.module';
+import { PromoCodesModule } from './promo-codes/promo-codes.module';
+import { GatesModule } from './gates/gates.module';
+import { ScannerDevicesModule } from './scanner-devices/scanner-devices.module';
 
 @Module({
   imports: [
@@ -23,6 +27,10 @@ import { NotificationsModule } from './notifications/notifications.module';
     EventsModule,
     TicketsModule,
     NotificationsModule,
+    WaitlistModule,
+    PromoCodesModule,
+    GatesModule,
+    ScannerDevicesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

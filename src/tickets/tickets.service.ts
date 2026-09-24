@@ -13,6 +13,8 @@ import { OrganizationsService } from '../organizations/organizations.service';
 import { StellarService } from '../stellar/stellar.service';
 import { NotificationService } from '../notifications/notifications.service';
 import { OfflineTokenService } from './offline-token.service';
+import { PromoCodesService } from '../promo-codes/promo-codes.service';
+import { GatesService } from '../gates/gates.service';
 
 /** How long an offline-verifiable token stays valid before a scanner must re-verify online. */
 const OFFLINE_TOKEN_TTL_SECONDS = 12 * 60 * 60;
@@ -26,6 +28,8 @@ export class TicketsService {
     @Optional() private readonly notifications?: NotificationService,
     @Optional() private readonly offlineTokens?: OfflineTokenService,
     @Optional() private readonly config?: ConfigService,
+    @Optional() private readonly promoCodes?: PromoCodesService,
+    @Optional() private readonly gates?: GatesService,
   ) {}
 
   // ---- Organizer-authorized issuance (off-chain payment already settled) ----
@@ -98,7 +102,12 @@ export class TicketsService {
 
   // ---- Fully on-chain primary sale ----
 
-  async buildPurchaseTx(buyerId: string, ticketTypeId: string, seat?: string) {
+  async buildPurchaseTx(
+    buyerId: string,
+    ticketTypeId: string,
+    seat?: string,
+    promoCode?: string,
+  ) {
     const { ticketType, event } =
       await this.getTicketTypeWithEvent(ticketTypeId);
     this.assertHasCapacity(ticketType.quantityIssued, ticketType.quantityTotal);
@@ -108,13 +117,23 @@ export class TicketsService {
       );
     }
     const buyer = await this.getUserWithWallet(buyerId);
+    const price = promoCode
+      ? (
+          await this.promoCodes!.validate(
+            event.id,
+            buyerId,
+            promoCode,
+            ticketType.price,
+          )
+        ).discountedPrice
+      : ticketType.price;
 
     const unsignedXdr = await this.stellar.buildPurchasePrimaryTx({
       buyerPublicKey: buyer.stellarPublicKey!,
       chainEventId: event.chainEventId,
       tier: ticketType.name,
       seat: seat ?? 'unassigned',
-      price: ticketType.price,
+      price,
     });
     return { unsignedXdr };
   }
@@ -124,6 +143,7 @@ export class TicketsService {
     ticketTypeId: string,
     seat: string | undefined,
     signedXdr: string,
+    promoCode?: string,
   ) {
     const { event } = await this.getTicketTypeWithEvent(ticketTypeId);
     const { result, txHash } =
@@ -146,6 +166,9 @@ export class TicketsService {
         },
       });
     });
+    if (promoCode) {
+      await this.promoCodes!.redeem(event.id, buyerId, promoCode, ticket.id);
+    }
     const buyer = await this.prisma.user.findUnique({ where: { id: buyerId } });
     if (buyer && this.notifications) {
       await this.notifications.sendTicketReceipt({
@@ -266,13 +289,51 @@ export class TicketsService {
     return { unsignedXdr };
   }
 
-  async confirmCheckIn(userId: string, ticketId: string, signedXdr: string) {
+  async confirmCheckIn(
+    userId: string,
+    ticketId: string,
+    signedXdr: string,
+    gateId?: string,
+  ) {
     const ticket = await this.getTicketWithOrg(ticketId);
     await this.organizations.assertMember(ticket.event.organizationId, userId);
+    if (gateId) {
+      await this.gates!.assertBelongsToEvent(gateId, ticket.eventId);
+    }
     await this.stellar.submitSignedTransaction(signedXdr);
     return this.prisma.ticket.update({
       where: { id: ticketId },
-      data: { status: TicketStatus.USED, checkedInAt: new Date() },
+      data: {
+        status: TicketStatus.USED,
+        checkedInAt: new Date(),
+        checkedInGateId: gateId ?? null,
+      },
+    });
+  }
+
+  /**
+   * Check-in via a `ScannerDevice` token (see `ScannerDeviceGuard`) instead
+   * of a staff JWT. The guard already confirmed the device is live and
+   * scoped to this ticket's event, so no `organizations.assertMember` call
+   * is needed here.
+   */
+  async confirmCheckInByDevice(
+    ticketId: string,
+    signedXdr: string,
+    gateId?: string,
+  ) {
+    const ticket = await this.getTicketWithOrg(ticketId);
+    if (gateId) {
+      await this.gates!.assertBelongsToEvent(gateId, ticket.eventId);
+    }
+    await this.stellar.submitSignedTransaction(signedXdr);
+    return this.prisma.ticket.update({
+      where: { id: ticketId },
+      data: {
+        status: TicketStatus.USED,
+        checkedInAt: new Date(),
+        checkedInGateId: gateId ?? null,
+      },
     });
   }
 
