@@ -33,7 +33,10 @@ export class TicketsController {
 
   @Get('resale')
   findActiveResaleListings(@Query() query: ResaleListingsQueryDto) {
-    return this.ticketsService.findActiveResaleListings(query.cursor, query.limit);
+    return this.ticketsService.findActiveResaleListings(
+      query.cursor,
+      query.limit,
+    );
   }
 
   @Get('mine')

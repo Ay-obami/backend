@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   Optional,
 } from '@nestjs/common';
@@ -21,6 +22,8 @@ const OFFLINE_TOKEN_TTL_SECONDS = 12 * 60 * 60;
 
 @Injectable()
 export class TicketsService {
+  private readonly logger = new Logger(TicketsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly organizations: OrganizationsService,
@@ -237,13 +240,28 @@ export class TicketsService {
     }
     await this.organizations.assertMember(ticket.event.organizationId, userId);
 
-    const onChain = await this.stellar.verifyTicket(ticket.chainTicketId);
-    const reconciledStatus = onChain.status.toUpperCase() as TicketStatus;
-    if (reconciledStatus !== ticket.status) {
-      await this.prisma.ticket.update({
-        where: { id: ticket.id },
-        data: { status: reconciledStatus },
-      });
+    // #321 — Graceful degradation: if the Soroban RPC is unavailable, serve
+    // the cached DB data with a `stale: true` marker rather than throwing.
+    let reconciledStatus: TicketStatus = ticket.status;
+    let onChainOwner: string | null = null;
+    let stale = false;
+
+    try {
+      const onChain = await this.stellar.verifyTicket(ticket.chainTicketId);
+      reconciledStatus = onChain.status.toUpperCase() as TicketStatus;
+      onChainOwner = onChain.owner;
+
+      if (reconciledStatus !== ticket.status) {
+        await this.prisma.ticket.update({
+          where: { id: ticket.id },
+          data: { status: reconciledStatus },
+        });
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Soroban RPC unavailable during verify (ticketId=${ticket.id}): ${(err as Error).message}. Serving cached data.`,
+      );
+      stale = true;
     }
 
     return {
@@ -253,7 +271,8 @@ export class TicketsService {
       seat: ticket.seat,
       ownerName: ticket.owner.name,
       status: reconciledStatus,
-      onChainOwner: onChain.owner,
+      onChainOwner,
+      stale,
     };
   }
 
@@ -378,10 +397,48 @@ export class TicketsService {
 
   // ---- Resale marketplace ----
 
+  /**
+   * #319 — Mirrors the contract's resale price cap arithmetic.
+   *
+   * cap = floor(originalPrice * maxResaleMultiplierBps / 10_000)
+   *
+   * Using BigInt division keeps the rounding identical to Rust's integer
+   * division (truncation toward zero), which is what the Soroban contract uses.
+   */
+  static computeResalePriceCap(
+    originalPrice: bigint,
+    maxResaleMultiplierBps: number,
+  ): bigint {
+    return (originalPrice * BigInt(maxResaleMultiplierBps)) / 10_000n;
+  }
+
+  private assertResalePriceCap(
+    price: bigint,
+    originalPrice: bigint,
+    maxResaleMultiplierBps: number,
+  ) {
+    const cap = TicketsService.computeResalePriceCap(
+      originalPrice,
+      maxResaleMultiplierBps,
+    );
+    if (price > cap) {
+      throw new BadRequestException(
+        `Resale price exceeds the event's anti-scalping cap of ${cap.toString()}`,
+      );
+    }
+  }
+
   async buildListForResaleTx(userId: string, ticketId: string, price: string) {
     await this.assertWithinResaleLimit(userId);
-    const ticket = await this.getOwnedTicket(ticketId, userId);
+    const ticket = await this.getOwnedTicketWithPricingInfo(ticketId, userId);
     const owner = await this.getUserWithWallet(userId);
+
+    // #319 — validate price cap before building the transaction
+    this.assertResalePriceCap(
+      BigInt(price),
+      ticket.ticketType.price,
+      ticket.event.maxResaleMultiplierBps,
+    );
 
     const unsignedXdr = await this.stellar.buildListForResaleTx({
       ownerPublicKey: owner.stellarPublicKey!,
@@ -399,7 +456,15 @@ export class TicketsService {
     expiresAt?: string,
   ) {
     await this.assertWithinResaleLimit(userId);
-    await this.getOwnedTicket(ticketId, userId);
+    const ticket = await this.getOwnedTicketWithPricingInfo(ticketId, userId);
+
+    // #319 — validate price cap at confirm step too (guards against replays)
+    this.assertResalePriceCap(
+      BigInt(price),
+      ticket.ticketType.price,
+      ticket.event.maxResaleMultiplierBps,
+    );
+
     const { txHash } = await this.stellar.submitSignedTransaction(signedXdr);
 
     return this.prisma.$transaction(async (tx) => {
@@ -427,6 +492,9 @@ export class TicketsService {
   async updateResalePrice(userId: string, listingId: string, newPrice: string) {
     const listing = await this.prisma.resaleListing.findUnique({
       where: { id: listingId },
+      include: {
+        ticket: { include: { ticketType: true, event: true } },
+      },
     });
     if (!listing) {
       throw new NotFoundException('Resale listing not found');
@@ -437,6 +505,14 @@ export class TicketsService {
     if (listing.status !== ResaleListingStatus.ACTIVE) {
       throw new BadRequestException('Listing is not active');
     }
+
+    // #319/#318 — validate new price against the event's anti-scalping cap
+    this.assertResalePriceCap(
+      BigInt(newPrice),
+      listing.ticket.ticketType.price,
+      listing.ticket.event.maxResaleMultiplierBps,
+    );
+
     return this.prisma.$transaction(async (tx) => {
       await tx.resalePriceHistory.create({
         data: {
@@ -576,11 +652,25 @@ export class TicketsService {
     const items = hasMore ? rows.slice(0, take) : rows;
     const last = items[items.length - 1];
     const nextCursor =
-      hasMore && last
-        ? this.encodeResaleCursor(last.createdAt, last.id)
-        : null;
+      hasMore && last ? this.encodeResaleCursor(last.createdAt, last.id) : null;
 
-    return { items, nextCursor, limit: take };
+    // #320 — Compute royalty fee and seller proceeds for each listing so
+    // clients don't have to duplicate the contract math.
+    // royaltyFee   = floor(price * royaltyBps / 10_000)
+    // sellerProceeds = price - royaltyFee
+    const enrichedItems = items.map((listing) => {
+      const price = listing.price;
+      const royaltyBps = listing.ticket.event.royaltyBps;
+      const royaltyFee = (price * BigInt(royaltyBps)) / 10_000n;
+      const sellerProceeds = price - royaltyFee;
+      return {
+        ...listing,
+        royaltyFee,
+        sellerProceeds,
+      };
+    });
+
+    return { items: enrichedItems, nextCursor, limit: take };
   }
 
   findMine(userId: string) {
@@ -617,6 +707,30 @@ export class TicketsService {
 
   private async getOwnedTicket(ticketId: string, userId: string) {
     const ticket = await this.getTicketWithOrg(ticketId);
+    if (ticket.ownerId !== userId) {
+      throw new ForbiddenException('You do not own this ticket');
+    }
+    return ticket;
+  }
+
+  /**
+   * Like `getOwnedTicket` but additionally includes `ticketType` and `event`
+   * relations needed for resale price-cap validation (#319).
+   */
+  private async getOwnedTicketWithPricingInfo(
+    ticketId: string,
+    userId: string,
+  ) {
+    const ticket = await this.prisma.ticket.findUnique({
+      where: { id: ticketId },
+      include: {
+        event: { include: { organization: true } },
+        ticketType: true,
+      },
+    });
+    if (!ticket) {
+      throw new NotFoundException('Ticket not found');
+    }
     if (ticket.ownerId !== userId) {
       throw new ForbiddenException('You do not own this ticket');
     }
@@ -679,10 +793,7 @@ export class TicketsService {
         throw new BadRequestException('Invalid cursor');
       }
       return {
-        OR: [
-          { createdAt: { lt: date } },
-          { createdAt: date, id: { lt: id } },
-        ],
+        OR: [{ createdAt: { lt: date } }, { createdAt: date, id: { lt: id } }],
       };
     } catch (err) {
       if (err instanceof BadRequestException) throw err;

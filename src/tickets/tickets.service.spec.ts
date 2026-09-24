@@ -250,7 +250,12 @@ describe('TicketsService', () => {
       });
 
       await expect(
-        service.buildTransferTx('not-the-owner', 'ticket-1', 'friend-1', 'GFRIEND'),
+        service.buildTransferTx(
+          'not-the-owner',
+          'ticket-1',
+          'friend-1',
+          'GFRIEND',
+        ),
       ).rejects.toBeInstanceOf(ForbiddenException);
     });
 
@@ -268,7 +273,12 @@ describe('TicketsService', () => {
         .mockResolvedValueOnce({ id: 'owner-1', stellarPublicKey: 'GOWNER' })
         .mockResolvedValueOnce({ id: 'friend-1', stellarPublicKey: 'GFRIEND' });
 
-      await service.buildTransferTx('owner-1', 'ticket-1', 'friend-1', 'GFRIEND');
+      await service.buildTransferTx(
+        'owner-1',
+        'ticket-1',
+        'friend-1',
+        'GFRIEND',
+      );
 
       expect(stellar.buildTransferTicketTx).toHaveBeenCalledWith({
         fromPublicKey: 'GOWNER',
@@ -399,7 +409,9 @@ describe('TicketsService', () => {
         event: {
           organizationId: 'org-1',
           organization: { stellarAccount: 'GORG' },
+          maxResaleMultiplierBps: 20_000,
         },
+        ticketType: { price: 1_000n },
       });
       prisma.resaleListing.create.mockResolvedValue({
         id: 'listing-1',
@@ -458,7 +470,9 @@ describe('TicketsService', () => {
         event: {
           organizationId: 'org-1',
           organization: { stellarAccount: 'GORG' },
+          maxResaleMultiplierBps: 20_000,
         },
+        ticketType: { price: 1_000n },
       });
       prisma.resaleListing.create.mockResolvedValue({
         id: 'listing-1',
@@ -488,6 +502,10 @@ describe('TicketsService', () => {
         sellerId: 'owner-1',
         status: 'ACTIVE',
         price: 1000n,
+        ticket: {
+          ticketType: { price: 1_000n },
+          event: { maxResaleMultiplierBps: 20_000 },
+        },
       });
 
       await service.updateResalePrice('owner-1', 'listing-1', '1500');
@@ -543,11 +561,15 @@ describe('TicketsService', () => {
     it('returns a cursor page with stable createdAt+id ordering', async () => {
       const newer = {
         id: 'listing-2',
+        price: 1_000n,
         createdAt: new Date('2026-09-02T00:00:00.000Z'),
+        ticket: { event: { royaltyBps: 500 }, ticketType: {} },
       };
       const older = {
         id: 'listing-1',
+        price: 1_000n,
         createdAt: new Date('2026-09-01T00:00:00.000Z'),
+        ticket: { event: { royaltyBps: 500 }, ticketType: {} },
       };
       prisma.resaleListing.findMany.mockResolvedValue([newer, older]);
 
@@ -559,16 +581,32 @@ describe('TicketsService', () => {
           take: 11,
         }),
       );
-      expect(page.items).toEqual([newer, older]);
+      // items contain enriched rows; check id equality
+      expect(page.items.map((i) => i.id)).toEqual([newer.id, older.id]);
       expect(page.nextCursor).toBeNull();
       expect(page.limit).toBe(10);
     });
 
     it('exposes nextCursor when more rows remain', async () => {
       const rows = [
-        { id: 'c', createdAt: new Date('2026-09-03T00:00:00.000Z') },
-        { id: 'b', createdAt: new Date('2026-09-02T00:00:00.000Z') },
-        { id: 'a', createdAt: new Date('2026-09-01T00:00:00.000Z') },
+        {
+          id: 'c',
+          price: 1_000n,
+          createdAt: new Date('2026-09-03T00:00:00.000Z'),
+          ticket: { event: { royaltyBps: 500 }, ticketType: {} },
+        },
+        {
+          id: 'b',
+          price: 1_000n,
+          createdAt: new Date('2026-09-02T00:00:00.000Z'),
+          ticket: { event: { royaltyBps: 500 }, ticketType: {} },
+        },
+        {
+          id: 'a',
+          price: 1_000n,
+          createdAt: new Date('2026-09-01T00:00:00.000Z'),
+          ticket: { event: { royaltyBps: 500 }, ticketType: {} },
+        },
       ];
       prisma.resaleListing.findMany.mockResolvedValue(rows);
 
@@ -601,6 +639,206 @@ describe('TicketsService', () => {
       expect(prisma.ticket.findMany).toHaveBeenCalledWith(
         expect.objectContaining({ where: { ownerId: 'owner-1' } }),
       );
+    });
+  });
+
+  // ---- #321 Graceful degradation ----
+
+  describe('verify — graceful RPC degradation (#321)', () => {
+    const baseTicket = {
+      id: 'ticket-1',
+      chainTicketId: 7n,
+      status: 'VALID',
+      seat: 'A1',
+      event: { organizationId: 'org-1', name: 'Radiohead Live' },
+      owner: { name: 'Ada Lovelace' },
+      ticketType: { name: 'GA' },
+    };
+
+    it('returns stale:false and on-chain data when RPC is available', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(baseTicket);
+      stellar.verifyTicket.mockResolvedValue({
+        owner: 'GBUYER',
+        status: 'Valid',
+      });
+
+      const result = await service.verify('staff-1', 'qr-secret');
+
+      expect(result.stale).toBe(false);
+      expect(result.status).toBe('VALID');
+      expect(result.onChainOwner).toBe('GBUYER');
+    });
+
+    it('returns stale:true with cached DB data when RPC throws', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(baseTicket);
+      stellar.verifyTicket.mockRejectedValue(new Error('RPC unavailable'));
+
+      const result = await service.verify('staff-1', 'qr-secret');
+
+      expect(result.stale).toBe(true);
+      expect(result.status).toBe('VALID');
+      expect(result.onChainOwner).toBeNull();
+      // should NOT attempt a DB update when RPC is down
+      expect(prisma.ticket.update).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---- #320 Royalty and seller proceeds ----
+
+  describe('findActiveResaleListings — royalty and proceeds (#320)', () => {
+    it('computes royaltyFee and sellerProceeds matching contract math', async () => {
+      const listing = {
+        id: 'listing-1',
+        createdAt: new Date('2026-09-01T00:00:00.000Z'),
+        price: 10_000n,
+        ticket: {
+          event: { royaltyBps: 500 },
+          ticketType: { price: 1_000n },
+        },
+        seller: { name: 'Alice' },
+      };
+      prisma.resaleListing.findMany.mockResolvedValue([listing]);
+
+      const page = await service.findActiveResaleListings(undefined, 10);
+
+      // royaltyFee = floor(10_000 * 500 / 10_000) = 500
+      expect(page.items[0].royaltyFee).toBe(500n);
+      // sellerProceeds = 10_000 - 500 = 9_500
+      expect(page.items[0].sellerProceeds).toBe(9_500n);
+    });
+
+    it('handles zero royaltyBps (no fee deducted)', async () => {
+      const listing = {
+        id: 'listing-2',
+        createdAt: new Date('2026-09-01T00:00:00.000Z'),
+        price: 5_000n,
+        ticket: {
+          event: { royaltyBps: 0 },
+          ticketType: { price: 1_000n },
+        },
+        seller: { name: 'Bob' },
+      };
+      prisma.resaleListing.findMany.mockResolvedValue([listing]);
+
+      const page = await service.findActiveResaleListings(undefined, 10);
+
+      expect(page.items[0].royaltyFee).toBe(0n);
+      expect(page.items[0].sellerProceeds).toBe(5_000n);
+    });
+  });
+
+  // ---- #319 Resale price cap validation ----
+
+  describe('computeResalePriceCap (#319)', () => {
+    it('mirrors contract floor(originalPrice * multiplierBps / 10_000)', () => {
+      // 1_000 * 11_000 / 10_000 = 1_100
+      expect(TicketsService.computeResalePriceCap(1_000n, 11_000)).toBe(1_100n);
+    });
+
+    it('truncates fractional results like Rust integer division', () => {
+      // 999 * 11_000 / 10_000 = 1098.9 → 1098
+      expect(TicketsService.computeResalePriceCap(999n, 11_000)).toBe(1098n);
+    });
+
+    it('returns 0 when multiplier is 0', () => {
+      expect(TicketsService.computeResalePriceCap(1_000n, 0)).toBe(0n);
+    });
+  });
+
+  describe('buildListForResaleTx — price cap validation (#319)', () => {
+    const ticketRow = {
+      id: 'ticket-1',
+      ownerId: 'owner-1',
+      chainTicketId: 7n,
+      event: {
+        organizationId: 'org-1',
+        organization: { stellarAccount: 'GORG' },
+        maxResaleMultiplierBps: 11_000,
+      },
+      ticketType: { price: 1_000n },
+    };
+
+    it('rejects a price above the cap', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticketRow);
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'owner-1',
+        stellarPublicKey: 'GOWNER',
+      });
+
+      // cap = 1_100; 1_101 > cap
+      await expect(
+        service.buildListForResaleTx('owner-1', 'ticket-1', '1101'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(stellar.buildListForResaleTx).not.toHaveBeenCalled();
+    });
+
+    it('accepts a price exactly at the cap', async () => {
+      prisma.ticket.findUnique.mockResolvedValue(ticketRow);
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'owner-1',
+        stellarPublicKey: 'GOWNER',
+      });
+
+      const result = await service.buildListForResaleTx(
+        'owner-1',
+        'ticket-1',
+        '1100',
+      );
+      expect(result.unsignedXdr).toBe('unsigned-xdr');
+    });
+  });
+
+  // ---- #318 update-price with price cap ----
+
+  describe('updateResalePrice — price cap validation (#318)', () => {
+    const listingWithPricingInfo = {
+      id: 'listing-1',
+      sellerId: 'owner-1',
+      status: 'ACTIVE',
+      price: 1_000n,
+      ticket: {
+        ticketType: { price: 1_000n },
+        event: { maxResaleMultiplierBps: 11_000 },
+      },
+    };
+
+    it('rejects a new price above the cap', async () => {
+      prisma.resaleListing.findUnique.mockResolvedValue(listingWithPricingInfo);
+
+      await expect(
+        service.updateResalePrice('owner-1', 'listing-1', '1101'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.resaleListing.update).not.toHaveBeenCalled();
+    });
+
+    it('accepts a new price at the cap', async () => {
+      prisma.resaleListing.findUnique.mockResolvedValue(listingWithPricingInfo);
+
+      await service.updateResalePrice('owner-1', 'listing-1', '1100');
+
+      expect(prisma.resaleListing.update).toHaveBeenCalledWith({
+        where: { id: 'listing-1' },
+        data: { price: 1100n },
+      });
+    });
+
+    it('rejects when listing is not ACTIVE', async () => {
+      prisma.resaleListing.findUnique.mockResolvedValue({
+        ...listingWithPricingInfo,
+        status: 'SOLD',
+      });
+
+      await expect(
+        service.updateResalePrice('owner-1', 'listing-1', '900'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejects when caller does not own the listing', async () => {
+      prisma.resaleListing.findUnique.mockResolvedValue(listingWithPricingInfo);
+
+      await expect(
+        service.updateResalePrice('someone-else', 'listing-1', '900'),
+      ).rejects.toBeInstanceOf(ForbiddenException);
     });
   });
 });
