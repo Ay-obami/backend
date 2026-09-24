@@ -16,7 +16,9 @@ export class CreateEventDto {
   @MinLength(2)
   name: string;
 
-  @IsEnum(Industry)
+  @IsEnum(Industry, {
+    message: `category must be one of: ${Object.values(Industry).join(', ')}`,
+  })
   category: Industry;
 
   @IsString()

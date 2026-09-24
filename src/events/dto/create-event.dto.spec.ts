@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
+import { Industry } from '@prisma/client';
 import { CreateEventDto } from './create-event.dto';
 
 function build(overrides: Record<string, unknown> = {}) {
@@ -43,8 +44,15 @@ describe('CreateEventDto', () => {
     expect(errors.some((e) => e.property === 'startsAt')).toBe(true);
   });
 
-  it('rejects an unrecognized category', async () => {
+  it('rejects an unrecognized category and lists the allowed values', async () => {
     const errors = await validate(build({ category: 'SPACE_TRAVEL' }));
-    expect(errors.some((e) => e.property === 'category')).toBe(true);
+    const categoryError = errors.find((e) => e.property === 'category');
+
+    expect(categoryError).toBeDefined();
+    const message = Object.values(categoryError?.constraints ?? {})[0];
+    expect(message).toContain('category must be one of');
+    for (const value of Object.values(Industry)) {
+      expect(message).toContain(value);
+    }
   });
 });
