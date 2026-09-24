@@ -36,4 +36,9 @@ describe('CreateTicketTypeDto', () => {
     const errors = await validate(build({ name: '' }));
     expect(errors.some((e) => e.property === 'name')).toBe(true);
   });
+
+  it('rejects a non-numeric price string', async () => {
+    const errors = await validate(build({ price: 'abc' }));
+    expect(errors.some((e) => e.property === 'price')).toBe(true);
+  });
 });

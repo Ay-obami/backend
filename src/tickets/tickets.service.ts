@@ -34,6 +34,7 @@ export class TicketsService {
     userId: string,
     ticketTypeId: string,
     toUserId: string,
+    toPublicKey: string,
     seat?: string,
   ) {
     const { ticketType, event } =
@@ -48,6 +49,7 @@ export class TicketsService {
     }
 
     const toUser = await this.getUserWithWallet(toUserId);
+    this.assertRecipientPublicKey(toUser.stellarPublicKey, toPublicKey);
     const unsignedXdr = await this.stellar.buildIssueTicketTx({
       organizerPublicKey: event.organization.stellarAccount,
       chainEventId: event.chainEventId,
@@ -63,11 +65,14 @@ export class TicketsService {
     userId: string,
     ticketTypeId: string,
     toUserId: string,
+    toPublicKey: string,
     seat: string | undefined,
     signedXdr: string,
   ) {
     const { event } = await this.getTicketTypeWithEvent(ticketTypeId);
     await this.organizations.assertMember(event.organizationId, userId);
+    const toUser = await this.getUserWithWallet(toUserId);
+    this.assertRecipientPublicKey(toUser.stellarPublicKey, toPublicKey);
 
     const { result, txHash } =
       await this.stellar.submitSignedTransaction(signedXdr);
@@ -157,10 +162,16 @@ export class TicketsService {
 
   // ---- Direct transfer ----
 
-  async buildTransferTx(userId: string, ticketId: string, toUserId: string) {
+  async buildTransferTx(
+    userId: string,
+    ticketId: string,
+    toUserId: string,
+    toPublicKey: string,
+  ) {
     const ticket = await this.getOwnedTicket(ticketId, userId);
     const owner = await this.getUserWithWallet(userId);
     const toUser = await this.getUserWithWallet(toUserId);
+    this.assertRecipientPublicKey(toUser.stellarPublicKey, toPublicKey);
 
     const unsignedXdr = await this.stellar.buildTransferTicketTx({
       fromPublicKey: owner.stellarPublicKey!,
@@ -174,9 +185,12 @@ export class TicketsService {
     userId: string,
     ticketId: string,
     toUserId: string,
+    toPublicKey: string,
     signedXdr: string,
   ) {
     await this.getOwnedTicket(ticketId, userId);
+    const toUser = await this.getUserWithWallet(toUserId);
+    this.assertRecipientPublicKey(toUser.stellarPublicKey, toPublicKey);
     await this.stellar.submitSignedTransaction(signedXdr);
     return this.prisma.ticket.update({
       where: { id: ticketId },
@@ -479,15 +493,33 @@ export class TicketsService {
     });
   }
 
-  findActiveResaleListings() {
-    return this.prisma.resaleListing.findMany({
-      where: { status: ResaleListingStatus.ACTIVE },
+  async findActiveResaleListings(cursor?: string, limit = 20) {
+    const take = Math.min(Math.max(limit, 1), 100);
+    const cursorFilter = cursor ? this.resaleCursorWhere(cursor) : undefined;
+
+    const rows = await this.prisma.resaleListing.findMany({
+      where: {
+        status: ResaleListingStatus.ACTIVE,
+        ...(cursorFilter ?? {}),
+      },
       include: {
         ticket: { include: { event: true, ticketType: true } },
         seller: { select: { name: true } },
       },
-      orderBy: { createdAt: 'desc' },
+      // createdAt + id keeps the order stable when timestamps collide.
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: take + 1,
     });
+
+    const hasMore = rows.length > take;
+    const items = hasMore ? rows.slice(0, take) : rows;
+    const last = items[items.length - 1];
+    const nextCursor =
+      hasMore && last
+        ? this.encodeResaleCursor(last.createdAt, last.id)
+        : null;
+
+    return { items, nextCursor, limit: take };
   }
 
   findMine(userId: string) {
@@ -555,5 +587,45 @@ export class TicketsService {
       throw new BadRequestException('Ticket sales have not started');
     if (endsAt && now > endsAt)
       throw new BadRequestException('Ticket sales have ended');
+  }
+
+  private assertRecipientPublicKey(
+    userPublicKey: string | null | undefined,
+    providedPublicKey: string,
+  ) {
+    if (userPublicKey !== providedPublicKey) {
+      throw new BadRequestException(
+        'Recipient public key does not match target user',
+      );
+    }
+  }
+
+  private encodeResaleCursor(createdAt: Date, id: string): string {
+    return Buffer.from(`${createdAt.toISOString()}|${id}`, 'utf8').toString(
+      'base64url',
+    );
+  }
+
+  private resaleCursorWhere(cursor: string) {
+    try {
+      const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+      const [dateStr, id] = decoded.split('|');
+      if (!dateStr || !id) {
+        throw new BadRequestException('Invalid cursor');
+      }
+      const date = new Date(dateStr);
+      if (isNaN(date.getTime())) {
+        throw new BadRequestException('Invalid cursor');
+      }
+      return {
+        OR: [
+          { createdAt: { lt: date } },
+          { createdAt: date, id: { lt: id } },
+        ],
+      };
+    } catch (err) {
+      if (err instanceof BadRequestException) throw err;
+      throw new BadRequestException('Invalid cursor');
+    }
   }
 }

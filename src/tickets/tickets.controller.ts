@@ -5,6 +5,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -22,6 +23,7 @@ import { ConfirmSignedTxDto } from './dto/confirm-signed-tx.dto';
 import { ListForResaleDto } from './dto/list-for-resale.dto';
 import { ConfirmListForResaleDto } from './dto/confirm-list-for-resale.dto';
 import { UpdateResalePriceDto } from './dto/update-resale-price.dto';
+import { ResaleListingsQueryDto } from './dto/resale-listings-query.dto';
 
 @Controller('tickets')
 @UseGuards(JwtAuthGuard)
@@ -29,8 +31,8 @@ export class TicketsController {
   constructor(private readonly ticketsService: TicketsService) {}
 
   @Get('resale')
-  findActiveResaleListings() {
-    return this.ticketsService.findActiveResaleListings();
+  findActiveResaleListings(@Query() query: ResaleListingsQueryDto) {
+    return this.ticketsService.findActiveResaleListings(query.cursor, query.limit);
   }
 
   @Get('mine')
@@ -69,6 +71,7 @@ export class TicketsController {
       user.userId,
       dto.ticketTypeId,
       dto.toUserId,
+      dto.toPublicKey,
       dto.seat,
     );
   }
@@ -82,6 +85,7 @@ export class TicketsController {
       user.userId,
       dto.ticketTypeId,
       dto.toUserId,
+      dto.toPublicKey,
       dto.seat,
       dto.signedXdr,
     );
@@ -122,6 +126,7 @@ export class TicketsController {
       user.userId,
       ticketId,
       dto.toUserId,
+      dto.toPublicKey,
     );
   }
 
@@ -135,6 +140,7 @@ export class TicketsController {
       user.userId,
       ticketId,
       dto.toUserId,
+      dto.toPublicKey,
       dto.signedXdr,
     );
   }

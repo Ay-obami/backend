@@ -211,11 +211,25 @@ npx prisma migrate dev   # creates the database schema
 npm run start:dev        # http://localhost:3000, hot-reloading
 ```
 
-Or with Docker (brings up Postgres alongside the app):
+Or with Docker (brings up Postgres only, for use with `npm run start:dev` on
+the host):
 
 ```bash
 docker compose up
 ```
+
+Or the full dev stack — Postgres **and** the API, with hot reload, in one
+command:
+
+```bash
+cp .env.example .env   # fill in JWT_SECRET, Soroban RPC config, etc.
+docker compose --profile full up
+```
+
+This runs pending Prisma migrations automatically before starting the API,
+and mounts the working directory into the container so edits on the host
+reload the running server. The API is then reachable at
+`http://localhost:3000`.
 
 ## Environment
 
